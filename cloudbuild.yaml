@@ -1,0 +1,48 @@
+steps:
+  # Build with docker buildx for proper multi-platform support
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'buildx'
+      - 'create'
+      - '--use'
+      - '--name'
+      - 'cloudbuilder'
+    id: 'setup-buildx'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        docker buildx build \
+          --platform=linux/amd64 \
+          --build-arg=USE_SLIM=true \
+          --build-arg=BUILD_HASH=${_SHORT_SHA} \
+          -t ${_IMAGE} \
+          --push \
+          .
+    id: 'build-push'
+    waitFor: ['setup-buildx']
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'openwebui'
+      - '--image=${_IMAGE}'
+      - '--region=us-central1'
+      - '--project=${PROJECT_ID}'
+    id: 'deploy'
+    waitFor: ['build-push']
+
+timeout: '2400s'  # 40 minutes
+
+options:
+  machineType: 'E2_HIGHCPU_32'
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _SHORT_SHA: 'dev'
+  _IMAGE: 'us-central1-docker.pkg.dev/${PROJECT_ID}/containers/open-webui:hub-chat-${_SHORT_SHA}'

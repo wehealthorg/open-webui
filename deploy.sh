@@ -2,7 +2,7 @@
 set -e
 
 # Hub Chat Deployment Script
-# Deploys white-labeled Open WebUI to Google Cloud Run
+# Deploys white-labeled Open WebUI to Google Cloud Run using Cloud Build
 
 # Configuration
 PROJECT_ID="hub-chat-prod"
@@ -18,14 +18,13 @@ NC='\033[0m' # No Color
 
 # Get version info
 BUILD_HASH=$(git rev-parse --short HEAD)
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 DEFAULT_TAG="hub-chat-${BUILD_HASH}"
 
 # Parse arguments
 TAG="${1:-$DEFAULT_TAG}"
 SKIP_BUILD=false
 DRY_RUN=false
-NO_CACHE=false
+LOCAL_BUILD=false
 
 usage() {
     echo "Usage: $0 [TAG] [OPTIONS]"
@@ -34,15 +33,15 @@ usage() {
     echo "  TAG           Docker image tag (default: hub-chat-<git-hash>)"
     echo ""
     echo "Options:"
-    echo "  --no-cache    Force rebuild without Docker cache (use after updating assets)"
-    echo "  --skip-build  Skip Docker build, only deploy existing image"
+    echo "  --skip-build  Skip build, only deploy existing image"
+    echo "  --local       Build locally instead of Cloud Build (slower)"
     echo "  --dry-run     Show what would be done without executing"
     echo "  --help        Show this help message"
     echo ""
     echo "Examples:"
-    echo "  $0                      # Build and deploy with auto-generated tag"
-    echo "  $0 v1.0.0               # Build and deploy with tag 'v1.0.0'"
-    echo "  $0 --no-cache           # Rebuild without cache (for asset updates)"
+    echo "  $0                      # Build on GCP and deploy with auto-generated tag"
+    echo "  $0 v1.0.0               # Build on GCP and deploy with tag 'v1.0.0'"
+    echo "  $0 --local              # Build locally (slower, for debugging)"
     echo "  $0 v1.0.0 --skip-build  # Deploy existing image tagged 'v1.0.0'"
     exit 0
 }
@@ -56,8 +55,8 @@ for arg in "$@"; do
         --dry-run)
             DRY_RUN=true
             ;;
-        --no-cache)
-            NO_CACHE=true
+        --local)
+            LOCAL_BUILD=true
             ;;
         --help|-h)
             usage
@@ -81,6 +80,7 @@ echo -e "Region:     ${YELLOW}${REGION}${NC}"
 echo -e "Service:    ${YELLOW}${SERVICE_NAME}${NC}"
 echo -e "Image:      ${YELLOW}${IMAGE}${NC}"
 echo -e "Git Hash:   ${YELLOW}${BUILD_HASH}${NC}"
+echo -e "Build Mode: ${YELLOW}$([ "$LOCAL_BUILD" = true ] && echo "Local" || echo "Cloud Build")${NC}"
 echo ""
 
 if [ "$DRY_RUN" = true ]; then
@@ -89,12 +89,7 @@ if [ "$DRY_RUN" = true ]; then
 fi
 
 # Check prerequisites
-echo -e "${GREEN}[1/4] Checking prerequisites...${NC}"
-
-if ! command -v docker &> /dev/null; then
-    echo -e "${RED}Error: docker is not installed${NC}"
-    exit 1
-fi
+echo -e "${GREEN}[1/3] Checking prerequisites...${NC}"
 
 if ! command -v gcloud &> /dev/null; then
     echo -e "${RED}Error: gcloud CLI is not installed${NC}"
@@ -107,46 +102,81 @@ if ! gcloud auth print-identity-token &> /dev/null; then
     exit 1
 fi
 
-# Check Docker authentication for Artifact Registry
-if ! docker-credential-gcloud list 2>/dev/null | grep -q "us-central1-docker.pkg.dev"; then
-    echo -e "${YELLOW}Configuring Docker for Artifact Registry...${NC}"
-    if [ "$DRY_RUN" = false ]; then
-        gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
-    else
-        echo "  gcloud auth configure-docker us-central1-docker.pkg.dev --quiet"
-    fi
-fi
-
 echo -e "${GREEN}✓ Prerequisites OK${NC}"
 echo ""
 
 # Build Docker image
 if [ "$SKIP_BUILD" = false ]; then
-    echo -e "${GREEN}[2/4] Building Docker image for linux/amd64...${NC}"
-    echo -e "      This may take 5-10 minutes..."
+    echo -e "${GREEN}[2/3] Building Docker image...${NC}"
 
-    CACHE_FLAG=""
-    if [ "$NO_CACHE" = true ]; then
-        CACHE_FLAG="--no-cache"
-        echo -e "      ${YELLOW}(--no-cache enabled, full rebuild)${NC}"
-    fi
+    if [ "$LOCAL_BUILD" = true ]; then
+        # Local build with docker buildx
+        echo -e "      Building locally (this may take 10-15 minutes)..."
 
-    if [ "$DRY_RUN" = false ]; then
-        docker buildx build \
-            --platform=linux/amd64 \
-            --build-arg="USE_SLIM=true" \
-            --build-arg="BUILD_HASH=${BUILD_HASH}" \
-            ${CACHE_FLAG} \
-            -t "${IMAGE}" \
-            --push \
-            .
+        if ! command -v docker &> /dev/null; then
+            echo -e "${RED}Error: docker is not installed${NC}"
+            exit 1
+        fi
+
+        # Check Docker authentication for Artifact Registry
+        if ! docker-credential-gcloud list 2>/dev/null | grep -q "us-central1-docker.pkg.dev"; then
+            echo -e "${YELLOW}Configuring Docker for Artifact Registry...${NC}"
+            if [ "$DRY_RUN" = false ]; then
+                gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+            fi
+        fi
+
+        if [ "$DRY_RUN" = false ]; then
+            docker buildx build \
+                --platform=linux/amd64 \
+                --build-arg="USE_SLIM=true" \
+                --build-arg="BUILD_HASH=${BUILD_HASH}" \
+                -t "${IMAGE}" \
+                --push \
+                .
+        else
+            echo "  docker buildx build --platform=linux/amd64 --build-arg=\"USE_SLIM=true\" --build-arg=\"BUILD_HASH=${BUILD_HASH}\" -t \"${IMAGE}\" --push ."
+        fi
     else
-        echo "  docker buildx build --platform=linux/amd64 --build-arg=\"USE_SLIM=true\" --build-arg=\"BUILD_HASH=${BUILD_HASH}\" ${CACHE_FLAG} -t \"${IMAGE}\" --push ."
+        # Cloud Build (faster)
+        echo -e "      Building on GCP Cloud Build (this may take 8-10 minutes)..."
+
+        if [ "$DRY_RUN" = false ]; then
+            gcloud builds submit \
+                --project="${PROJECT_ID}" \
+                --region="${REGION}" \
+                --config=cloudbuild.yaml \
+                --substitutions="_SHORT_SHA=${BUILD_HASH}"
+
+            echo -e "${GREEN}✓ Image built and pushed${NC}"
+            echo ""
+
+            echo -e "${GREEN}[3/3] Deployment handled by Cloud Build${NC}"
+            echo ""
+
+            # Verify deployment
+            SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" \
+                --region="${REGION}" \
+                --project="${PROJECT_ID}" \
+                --format="value(status.url)")
+
+            echo -e "${GREEN}======================================${NC}"
+            echo -e "${GREEN}  Deployment Complete!${NC}"
+            echo -e "${GREEN}======================================${NC}"
+            echo ""
+            echo -e "Service URL:  ${YELLOW}${SERVICE_URL}${NC}"
+            echo -e "Custom URL:   ${YELLOW}https://chat.hub.inc${NC}"
+            echo -e "Image:        ${YELLOW}${IMAGE}${NC}"
+            echo ""
+            exit 0
+        else
+            echo "  gcloud builds submit --project=\"${PROJECT_ID}\" --region=\"${REGION}\" --config=cloudbuild.yaml --substitutions=\"_SHORT_SHA=${BUILD_HASH}\""
+        fi
     fi
 
     echo -e "${GREEN}✓ Image built and pushed${NC}"
 else
-    echo -e "${YELLOW}[2/4] Skipping build (--skip-build)${NC}"
+    echo -e "${YELLOW}[2/3] Skipping build (--skip-build)${NC}"
 
     # Verify image exists
     if [ "$DRY_RUN" = false ]; then
@@ -159,8 +189,8 @@ else
 fi
 echo ""
 
-# Deploy to Cloud Run
-echo -e "${GREEN}[3/4] Deploying to Cloud Run...${NC}"
+# Deploy to Cloud Run (only for local builds or skip-build)
+echo -e "${GREEN}[3/3] Deploying to Cloud Run...${NC}"
 
 if [ "$DRY_RUN" = false ]; then
     gcloud run deploy "${SERVICE_NAME}" \
@@ -175,8 +205,6 @@ echo -e "${GREEN}✓ Deployed to Cloud Run${NC}"
 echo ""
 
 # Verify deployment
-echo -e "${GREEN}[4/4] Verifying deployment...${NC}"
-
 if [ "$DRY_RUN" = false ]; then
     # Get service URL
     SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" \
