@@ -369,7 +369,7 @@
 
 					if ($isLastActiveTab) {
 						if ($settings?.notificationEnabled ?? false) {
-							new Notification(`${displayTitle} • Open WebUI`, {
+							new Notification(`${displayTitle} • Hub Chat`, {
 								body: content,
 								icon: `${WEBUI_BASE_URL}/static/favicon.png`
 							});
@@ -572,7 +572,7 @@
 
 				if ($isLastActiveTab) {
 					if ($settings?.notificationEnabled ?? false) {
-						new Notification(`${title} • Open WebUI`, {
+						new Notification(`${title} • Hub Chat`, {
 							body: data?.content,
 							icon: `${WEBUI_API_BASE_URL}/users/${data?.user?.id}/profile/image`
 						});
@@ -614,18 +614,7 @@
 	};
 
 	const windowMessageEventHandler = async (event) => {
-		if (
-			!['https://openwebui.com', 'https://www.openwebui.com', 'http://localhost:9999'].includes(
-				event.origin
-			)
-		) {
-			return;
-		}
-
-		if (event.data === 'export:stats' || event.data?.type === 'export:stats') {
-			syncStatsEventData = event.data;
-			showSyncStatsModal = true;
-		}
+		// Reserved for future use
 	};
 
 	onMount(async () => {
@@ -905,10 +894,6 @@
 	{:else}
 		<slot />
 	{/if}
-{/if}
-
-{#if $config?.features.enable_community_sharing}
-	<SyncStatsModal bind:show={showSyncStatsModal} eventData={syncStatsEventData} />
 {/if}
 
 <Toaster
