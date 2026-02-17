@@ -14,11 +14,13 @@ steps:
     args:
       - '-c'
       - |
+        IMG="us-central1-docker.pkg.dev/$PROJECT_ID/containers/open-webui:hub-chat-$_SHORT_SHA"
+        echo "Building image: $$IMG"
         docker buildx build \
           --platform=linux/amd64 \
           --build-arg=USE_SLIM=true \
-          --build-arg=BUILD_HASH=${_SHORT_SHA} \
-          -t ${_IMAGE} \
+          --build-arg=BUILD_HASH=$_SHORT_SHA \
+          -t "$$IMG" \
           --push \
           .
     id: 'build-push'
@@ -26,14 +28,16 @@ steps:
 
   # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: 'gcloud'
+    entrypoint: 'bash'
     args:
-      - 'run'
-      - 'deploy'
-      - 'openwebui'
-      - '--image=${_IMAGE}'
-      - '--region=us-central1'
-      - '--project=${PROJECT_ID}'
+      - '-c'
+      - |
+        IMG="us-central1-docker.pkg.dev/$PROJECT_ID/containers/open-webui:hub-chat-$_SHORT_SHA"
+        echo "Deploying image: $$IMG"
+        gcloud run deploy openwebui \
+          --image="$$IMG" \
+          --region=us-central1 \
+          --project=$PROJECT_ID
     id: 'deploy'
     waitFor: ['build-push']
 
@@ -45,4 +49,3 @@ options:
 
 substitutions:
   _SHORT_SHA: 'dev'
-  _IMAGE: 'us-central1-docker.pkg.dev/${PROJECT_ID}/containers/open-webui:hub-chat-${_SHORT_SHA}'
