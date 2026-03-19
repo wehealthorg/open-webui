@@ -1,5 +1,4 @@
-<script>
-	import { v4 as uuidv4 } from 'uuid';
+<script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
 	import { config, models, settings } from '$lib/stores';
@@ -61,11 +60,12 @@
 
 	let model = null;
 
-	onMount(async () => {
+	onMount(() => {
 		if (sessionStorage.model) {
 			model = JSON.parse(sessionStorage.model);
 			sessionStorage.removeItem('model');
 		}
+
 	});
 </script>
 

@@ -52,6 +52,7 @@
 	};
 
 	onMount(() => {
+
 		if (sessionStorage.tool) {
 			tool = JSON.parse(sessionStorage.tool);
 			sessionStorage.removeItem('tool');

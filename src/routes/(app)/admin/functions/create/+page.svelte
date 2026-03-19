@@ -61,6 +61,7 @@
 	};
 
 	onMount(() => {
+
 		if (sessionStorage.function) {
 			func = JSON.parse(sessionStorage.function);
 			sessionStorage.removeItem('function');
